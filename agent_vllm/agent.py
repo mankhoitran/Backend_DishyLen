@@ -36,10 +36,18 @@ class VLLMFoodAgent:
 
         collected: dict[str, Any] = {
             "dish": parsed.dish_name,
+            "description": "",
             "spicy_level": "unknown",
             "macros": {},
             "summary": "",
             "image_url": "",
+            "calories": None,
+            "protein": None,
+            "carbs": None,
+            "fats": None,
+            "ingredients": [],
+            "allergens": [],
+            "sources": [],
             "source": "search",
         }
 
@@ -91,10 +99,18 @@ class VLLMFoodAgent:
 
         return {
             "dish": collected.get("dish", parsed.dish_name),
+            "description": collected.get("description", ""),
             "spicy_level": collected.get("spicy_level", "unknown"),
             "macros": collected.get("macros", {}),
+            "calories": collected.get("calories"),
+            "protein": collected.get("protein"),
+            "carbs": collected.get("carbs"),
+            "fats": collected.get("fats"),
             "summary": collected.get("summary", ""),
             "image_url": collected.get("image_url", ""),
+            "ingredients": collected.get("ingredients", []),
+            "allergens": collected.get("allergens", []),
+            "sources": collected.get("sources", []),
             "source": collected.get("source", "search"),
         }
 
@@ -103,9 +119,19 @@ class VLLMFoodAgent:
         """Merge non-empty tool outputs into collected state."""
 
         merged = dict(current)
-        for key in ("dish", "spicy_level", "summary", "image_url", "source"):
+        for key in ("dish", "description", "spicy_level", "summary", "image_url", "source"):
             value = incoming.get(key)
             if value:
+                merged[key] = value
+
+        for key in ("calories", "protein", "carbs", "fats"):
+            value = incoming.get(key)
+            if value not in (None, "", "unknown"):
+                merged[key] = value
+
+        for key in ("ingredients", "allergens", "sources"):
+            value = incoming.get(key)
+            if isinstance(value, list) and value:
                 merged[key] = value
 
         incoming_macros = incoming.get("macros")

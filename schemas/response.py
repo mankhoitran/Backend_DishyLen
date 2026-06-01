@@ -18,6 +18,33 @@ class DishResponse(BaseModel):
     source: Literal["database", "search"]
 
 
+class OCRUploadResponse(BaseModel):
+    """Response payload for OCR upload."""
+
+    image_path: str
+    image_url: str
+
+
+class OCRItemsResponse(BaseModel):
+    """Response payload for OCR items."""
+
+    image_path: str
+    image_url: str
+    ocr_status: str
+    ocr_text: str
+    items: list[str] = Field(default_factory=list)
+
+
+class OCRSelectResponse(BaseModel):
+    """Response payload for OCR selection and dish lookup."""
+
+    image_path: str
+    image_url: str
+    selected_item: str
+    dish_info: DishResponse
+    ingredients: list[str] = Field(default_factory=list)
+
+
 class DishListResponse(BaseModel):
     """Response payload for listing dishes from the database."""
 

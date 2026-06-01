@@ -12,8 +12,10 @@ from typing import Any
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from config import get_settings
+from services.logging_utils import get_llm_response_logger
 
 logger = logging.getLogger(__name__)
+llm_response_logger = get_llm_response_logger()
 
 
 @dataclass
@@ -33,9 +35,68 @@ class VLLMClient:
             raise ValueError("VLLM_BASE_URL is missing. Set it in your environment or .env file.")
 
         self.base_url = settings.vllm_base_url.rstrip("/")
-        self.model = settings.vllm_model
         self.api_key = settings.vllm_api_key
         self.timeout = settings.vllm_timeout_seconds
+        self.model = self._resolve_model(settings.vllm_model)
+
+    def _resolve_model(self, configured_model: str | None) -> str:
+        model = (configured_model or "").strip()
+        if model and model.lower() != "auto":
+            try:
+                available = self._fetch_model_ids()
+                if available:
+                    if model in available:
+                        return model
+                    logger.warning(
+                        "Configured vLLM model '%s' not found; using '%s' from server.",
+                        model,
+                        available[0],
+                    )
+                    return available[0]
+            except Exception as exc:
+                logger.warning(
+                    "Failed to fetch vLLM models; using configured model '%s': %s",
+                    model,
+                    exc,
+                )
+                return model
+
+            return model
+
+        available = self._fetch_model_ids()
+        if available:
+            logger.info("Auto-detected vLLM model: %s", available[0])
+            return available[0]
+
+        raise ValueError("VLLM_MODEL is missing and the vLLM server returned no models.")
+
+    def _fetch_model_ids(self) -> list[str]:
+        data = self._get_json("/models")
+        items = data.get("data") or []
+        return [
+            item.get("id")
+            for item in items
+            if isinstance(item, dict) and item.get("id")
+        ]
+
+    def _get_json(self, path: str) -> dict[str, Any]:
+        url = f"{self.base_url}{path}"
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+
+        request = urllib.request.Request(url, headers=headers, method="GET")
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                body = response.read().decode("utf-8")
+            return json.loads(body)
+        except urllib.error.HTTPError as exc:
+            body = ""
+            if exc.fp:
+                body = exc.fp.read().decode("utf-8", errors="ignore")
+            raise RuntimeError(f"vLLM request failed: {exc.code} {body}") from exc
+        except urllib.error.URLError as exc:
+            raise RuntimeError(f"vLLM request failed: {exc.reason}") from exc
 
     @retry(
         stop=stop_after_attempt(3),
@@ -65,7 +126,22 @@ class VLLMClient:
         choice = (data.get("choices") or [{}])[0]
         message = choice.get("message") or {}
         text = message.get("content") or ""
+        self._log_response(text, data)
         return VLLMResult(text=text, raw=data)
+
+    def _log_response(self, text: str, raw: dict[str, Any]) -> None:
+        payload = {
+            "provider": "vllm",
+            "model": self.model,
+            "text": text,
+        }
+        usage = raw.get("usage") if isinstance(raw, dict) else None
+        if usage:
+            payload["usage"] = usage
+        try:
+            llm_response_logger.info(json.dumps(payload, ensure_ascii=True))
+        except Exception:
+            logger.exception("Failed to write LLM response log")
 
     def generate_json(
         self,

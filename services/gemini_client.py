@@ -12,8 +12,10 @@ from google.genai import types
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from config import get_settings
+from services.logging_utils import get_llm_response_logger
 
 logger = logging.getLogger(__name__)
+llm_response_logger = get_llm_response_logger()
 
 
 @dataclass
@@ -61,6 +63,7 @@ class GeminiClient:
             ),
         )
         result = self._parse_response(response)
+        self._log_response(result)
         return {
             "text": result.text,
             "function_calls": result.function_calls,
@@ -88,7 +91,21 @@ class GeminiClient:
                 temperature=0.2,
             ),
         )
-        return self._parse_response(response)
+        result = self._parse_response(response)
+        self._log_response(result)
+        return result
+
+    def _log_response(self, result: GeminiResult) -> None:
+        payload = {
+            "provider": "gemini",
+            "model": self.model,
+            "text": result.text,
+            "function_calls": result.function_calls,
+        }
+        try:
+            llm_response_logger.info(json.dumps(payload, ensure_ascii=True))
+        except Exception:
+            logger.exception("Failed to write LLM response log")
 
     def _parse_response(self, response: Any) -> GeminiResult:
         """Extract plain text and function call objects from Gemini response."""

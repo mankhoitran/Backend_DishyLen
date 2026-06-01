@@ -17,7 +17,7 @@ class Settings(BaseSettings):
 
     gemini_api_key: str = Field(default="AIzaSyBhK3yz4ZJmnDSUznI3aXQDWzZDxJcKkSw", alias="GEMINI_API_KEY")
     gemini_model: str = "gemini-2.0-flash"
-    vllm_base_url: str = Field(default="http://localhost:8080/v1", alias="VLLM_BASE_URL")
+    vllm_base_url: str = Field(default="http://192.168.20.150:8003/v1", alias="VLLM_BASE_URL")
     vllm_api_key: str = Field(default="", alias="VLLM_API_KEY")
     vllm_model: str = Field(default="Qwen3-4B", alias="VLLM_MODEL")
     vllm_timeout_seconds: int = Field(default=60, alias="VLLM_TIMEOUT_SECONDS")

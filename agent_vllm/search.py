@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from duckduckgo_search import DDGS
+from ddgs import DDGS
 
 from .vllm_client import VLLMClient
 
@@ -31,17 +31,30 @@ class DuckDuckGoSearchService:
             f"{dish_name} dish ingredients spicy level nutrition calories macros"
         )
         instruction = (
-            "Return ONLY JSON with keys: dish, spicy_level, macros, summary, image_url. "
+            "Return ONLY JSON with keys: dish, description, summary, calories, protein, carbs, fats, "
+            "ingredients, allergens, spicy_level, macros, image_url. "
+            "description should be factual, 2-3 sentences, under 90 words. "
+            "summary should be one sentence under 30 words. "
+            "calories must be kcal per serving, and protein/carbs/fats must be grams per serving "
+            "(numbers or null). "
+            "ingredients and allergens must be arrays of strings (empty if unknown). "
             "spicy_level must be one of: not_spicy, mild, medium, hot, very_hot, unknown. "
             "macros must be an object with keys calories_kcal, protein_g, carbs_g, fat_g "
             "(numbers or null). "
-            "summary should be factual, 2-3 sentences, and under 80 words. "
             "Avoid mentioning sources or search. "
-            "If sources are empty, summary should be 'No sources found.'. "
+            "If sources are empty, description and summary should be 'No sources found.'. "
             "image_url should be empty if no reliable image appears in sources."
         )
         fallback = {
             "dish": dish_name,
+            "description": "No sources found.",
+            "summary": "No sources found.",
+            "calories": None,
+            "protein": None,
+            "carbs": None,
+            "fats": None,
+            "ingredients": [],
+            "allergens": [],
             "spicy_level": "unknown",
             "macros": {
                 "calories_kcal": None,
@@ -49,14 +62,20 @@ class DuckDuckGoSearchService:
                 "carbs_g": None,
                 "fat_g": None,
             },
-            "summary": "No sources found.",
             "image_url": "",
         }
         payload = self._ask_json(instruction, sources, fallback)
         payload.setdefault("dish", dish_name)
+        payload.setdefault("description", "No summary found.")
+        payload.setdefault("summary", "No summary found.")
+        payload.setdefault("calories", None)
+        payload.setdefault("protein", None)
+        payload.setdefault("carbs", None)
+        payload.setdefault("fats", None)
+        payload.setdefault("ingredients", [])
+        payload.setdefault("allergens", [])
         payload.setdefault("spicy_level", "unknown")
         payload.setdefault("macros", {})
-        payload.setdefault("summary", "No summary found.")
         payload.setdefault("image_url", "")
         return payload
 
