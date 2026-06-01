@@ -7,6 +7,7 @@ from pathlib import Path
 
 LOG_DIR = Path(__file__).resolve().parents[1] / "logs"
 LLM_LOG_PATH = LOG_DIR / "llm_responses.log"
+SCHEMA_LOG_PATH = LOG_DIR / "schema.log"
 
 
 def get_llm_response_logger() -> logging.Logger:
@@ -20,6 +21,26 @@ def get_llm_response_logger() -> logging.Logger:
         for handler in logger.handlers
     ):
         handler = logging.FileHandler(LLM_LOG_PATH)
+        handler.setFormatter(
+            logging.Formatter("%(asctime)s | %(levelname)s | %(message)s")
+        )
+        logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+    return logger
+
+
+def get_schema_logger() -> logging.Logger:
+    """Return a file logger for schema snapshots."""
+
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    logger = logging.getLogger("schema.snapshots")
+    if not any(
+        isinstance(handler, logging.FileHandler)
+        and getattr(handler, "baseFilename", "") == str(SCHEMA_LOG_PATH)
+        for handler in logger.handlers
+    ):
+        handler = logging.FileHandler(SCHEMA_LOG_PATH)
         handler.setFormatter(
             logging.Formatter("%(asctime)s | %(levelname)s | %(message)s")
         )

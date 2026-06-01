@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class DishResponse(BaseModel):
@@ -16,6 +16,25 @@ class DishResponse(BaseModel):
     summary: str = Field(default="")
     image_url: str = Field(default="")
     source: Literal["database", "search"]
+
+
+class UserResponse(BaseModel):
+    """Response payload for a logged-in user."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    email: str
+    name: str
+    picture_url: str
+
+
+class AuthResponse(BaseModel):
+    """Response payload for authentication tokens."""
+
+    access_token: str
+    token_type: str = Field(default="bearer")
+    user: UserResponse
 
 
 class OCRUploadResponse(BaseModel):

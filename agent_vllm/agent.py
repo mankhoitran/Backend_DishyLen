@@ -7,7 +7,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from agent.parser import parse_input
+from agent_vllm.parser import parse_input
 from config import get_settings
 from .search import DuckDuckGoSearchService
 from .tools import VLLMAgentTools

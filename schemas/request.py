@@ -33,3 +33,9 @@ class OCRSelectRequest(BaseModel):
         default=None,
         description="Optional language code to translate summary output",
     )
+
+
+class GoogleAuthRequest(BaseModel):
+    """Incoming Google login payload."""
+
+    id_token: str = Field(..., description="Google ID token from the client")

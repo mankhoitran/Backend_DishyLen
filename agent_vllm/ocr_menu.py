@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
-from agent.parser import parse_input
+from .parser import parse_input
 
 logger = logging.getLogger(__name__)
 
@@ -166,6 +166,23 @@ def apply_ocr_prompt(
         except Exception as exc:
             logger.warning("vLLM OCR post-process failed: %s", exc)
             if prefer_backend == "vllm":
+                return fallback
+
+    if prefer_backend in {"auto", "openrouter"}:
+        try:
+            from services.openrouter_client import OpenRouterClient
+
+            openrouter_client = OpenRouterClient()
+            payload = openrouter_client.generate_json(
+                system_prompt="You are a strict OCR post-processor.",
+                user_prompt=prompt,
+                max_tokens=1200,
+                fallback=fallback,
+            )
+            return _sanitize_ocr_payload(payload, fallback)
+        except Exception as exc:
+            logger.warning("OpenRouter OCR post-process failed: %s", exc)
+            if prefer_backend == "openrouter":
                 return fallback
 
     if prefer_backend in {"auto", "gemini"}:
