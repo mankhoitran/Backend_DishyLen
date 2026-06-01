@@ -37,6 +37,25 @@ class AuthResponse(BaseModel):
     user: UserResponse
 
 
+class HistoryEntryResponse(BaseModel):
+    """Response payload for one user history entry."""
+
+    id: int
+    type: Literal["query", "ocr", "summary"]
+    title: str
+    payload: dict[str, Any]
+    created_at: str
+    user_id: int
+    user_email: str
+
+
+class HistoryListResponse(BaseModel):
+    """Response payload for user history."""
+
+    items: list[HistoryEntryResponse] = Field(default_factory=list)
+    total: int = Field(default=0)
+
+
 class OCRUploadResponse(BaseModel):
     """Response payload for OCR upload."""
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any, Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -39,3 +41,11 @@ class GoogleAuthRequest(BaseModel):
     """Incoming Google login payload."""
 
     id_token: str = Field(..., description="Google ID token from the client")
+
+
+class HistoryCreateRequest(BaseModel):
+    """Incoming history entry payload."""
+
+    type: Literal["query", "ocr", "summary"]
+    title: str = Field(..., min_length=1, max_length=255)
+    payload: dict[str, Any] = Field(default_factory=dict)

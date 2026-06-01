@@ -6,7 +6,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from db.models import Dish, User
+from db.models import Dish, HistoryEntry, User
 
 
 def get_dish_by_name(db: Session, dish_name: str) -> Dish | None:
@@ -121,3 +121,49 @@ def upsert_user(
     db.commit()
     db.refresh(user)
     return user
+
+
+def create_history_entry(
+    db: Session,
+    *,
+    user_id: int,
+    entry_type: str,
+    title: str,
+    payload: dict[str, Any],
+) -> HistoryEntry:
+    """Persist one user activity history entry."""
+
+    entry = HistoryEntry(
+        user_id=user_id,
+        type=entry_type.strip(),
+        title=title.strip(),
+        payload=payload or {},
+    )
+    db.add(entry)
+    db.commit()
+    db.refresh(entry)
+    return entry
+
+
+def list_history_entries(
+    db: Session,
+    *,
+    user_id: int,
+    entry_type: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> tuple[list[HistoryEntry], int]:
+    """List history entries for a user."""
+
+    base_query = db.query(HistoryEntry).filter(HistoryEntry.user_id == user_id)
+    if entry_type:
+        base_query = base_query.filter(HistoryEntry.type == entry_type.strip())
+
+    total = base_query.count()
+    items = (
+        base_query.order_by(HistoryEntry.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+    return items, total

@@ -1,0 +1,2 @@
+Requirement already satisfied: PyJWT in ./.venv/lib/python3.10/site-packages (2.13.0)
+Requirement already satisfied: typing_extensions>=4.0 in ./.venv/lib/python3.10/site-packages (from PyJWT) (4.15.0)

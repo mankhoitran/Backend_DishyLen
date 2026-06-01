@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
 
-from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -29,12 +29,13 @@ from agent_vllm.vllm_client import VLLMClient
 from config import get_settings
 from db import crud
 from db.database import Base, engine, get_db
-from db.models import Dish
+from db.models import Dish, HistoryEntry, User
 import schemas.request as request_schemas
 import schemas.response as response_schemas
 from prompt.loader import format_prompt, load_prompt
 from schemas.request import QueryRequest
 from schemas.response import DishListResponse, DishResponse, OCRUploadResponse
+from services.auth import AuthError, create_access_token, decode_access_token, verify_google_id_token
 from services.schema_logger import collect_pydantic_models, log_schema_snapshot
 
 
@@ -189,11 +190,126 @@ def on_startup() -> None:
         logging.getLogger(__name__).warning("Failed to log schema snapshot: %s", exc)
 
 
+def _current_user(
+    authorization: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+) -> User:
+    """Resolve the current user from a bearer token."""
+
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Missing authorization header")
+
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not token:
+        raise HTTPException(status_code=401, detail="Invalid authorization header")
+
+    try:
+        claims = decode_access_token(token)
+    except AuthError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+
+    user_id = claims.get("sub")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid access token")
+
+    try:
+        user = crud.get_user_by_id(db, int(user_id))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=401, detail="Invalid access token") from exc
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    return user
+
+
 @app.get("/health")
 def health_check() -> dict[str, str]:
     """Health endpoint."""
 
     return {"status": "ok"}
+
+
+@app.post("/auth/google", response_model=response_schemas.AuthResponse)
+def google_login(
+    payload: request_schemas.GoogleAuthRequest,
+    db: Session = Depends(get_db),
+) -> response_schemas.AuthResponse:
+    """Authenticate with a Google ID token and return an app access token."""
+
+    try:
+        claims = verify_google_id_token(payload.id_token)
+        user = crud.upsert_user(
+            db,
+            google_sub=str(claims["sub"]),
+            email=str(claims["email"]),
+            name=str(claims.get("name") or ""),
+            picture_url=str(claims.get("picture") or ""),
+        )
+        token = create_access_token(
+            user_id=user.id,
+            email=user.email,
+            name=user.name,
+            picture_url=user.picture_url,
+        )
+    except AuthError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+
+    return response_schemas.AuthResponse(
+        access_token=token,
+        user=_user_to_response(user),
+    )
+
+
+@app.get("/auth/me", response_model=response_schemas.UserResponse)
+def get_me(current_user: User = Depends(_current_user)) -> response_schemas.UserResponse:
+    """Return the current authenticated user."""
+
+    return _user_to_response(current_user)
+
+
+@app.post("/history", response_model=response_schemas.HistoryEntryResponse)
+def create_history(
+    payload: request_schemas.HistoryCreateRequest,
+    current_user: User = Depends(_current_user),
+    db: Session = Depends(get_db),
+) -> response_schemas.HistoryEntryResponse:
+    """Persist one history entry for the current user."""
+
+    entry = crud.create_history_entry(
+        db,
+        user_id=current_user.id,
+        entry_type=payload.type,
+        title=payload.title,
+        payload=payload.payload,
+    )
+    return _history_to_response(entry, current_user)
+
+
+@app.get("/history", response_model=response_schemas.HistoryListResponse)
+def list_history(
+    type: Literal["query", "ocr", "summary"] | None = None,
+    limit: int = 100,
+    offset: int = 0,
+    current_user: User = Depends(_current_user),
+    db: Session = Depends(get_db),
+) -> response_schemas.HistoryListResponse:
+    """List history entries for the current user."""
+
+    if limit < 1 or limit > 100:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 100")
+    if offset < 0:
+        raise HTTPException(status_code=400, detail="offset must be >= 0")
+
+    items, total = crud.list_history_entries(
+        db,
+        user_id=current_user.id,
+        entry_type=type,
+        limit=limit,
+        offset=offset,
+    )
+    return response_schemas.HistoryListResponse(
+        items=[_history_to_response(item, current_user) for item in items],
+        total=total,
+    )
 
 
 @app.get("/dishes", response_model=DishListResponse)
@@ -438,6 +554,30 @@ def _dish_to_response(dish: Dish) -> DishResponse:
         summary=dish.summary or "",
         image_url="",
         source="database",
+    )
+
+
+def _user_to_response(user: User) -> response_schemas.UserResponse:
+    return response_schemas.UserResponse(
+        id=user.id,
+        email=user.email,
+        name=user.name,
+        picture_url=user.picture_url,
+    )
+
+
+def _history_to_response(
+    entry: HistoryEntry,
+    user: User,
+) -> response_schemas.HistoryEntryResponse:
+    return response_schemas.HistoryEntryResponse(
+        id=entry.id,
+        type=entry.type,
+        title=entry.title,
+        payload=entry.payload or {},
+        created_at=entry.created_at.isoformat(),
+        user_id=user.id,
+        user_email=user.email,
     )
 
 

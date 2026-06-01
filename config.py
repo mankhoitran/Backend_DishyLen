@@ -34,7 +34,10 @@ class Settings(BaseSettings):
     sqlite_db_url: str = Field(default="sqlite:///./food_agent.db", alias="SQLITE_DB_URL")
 
     cors_origins: str = Field(
-        default="http://localhost:8080,http://127.0.0.1:8080",
+        default=(
+            "http://localhost:8080,http://127.0.0.1:8080,"
+            "http://localhost:5173,http://127.0.0.1:5173"
+        ),
         alias="CORS_ORIGINS",
     )
     uploads_dir: str = Field(default="uploads", alias="UPLOADS_DIR")
