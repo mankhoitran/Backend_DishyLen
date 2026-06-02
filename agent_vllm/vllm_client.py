@@ -13,6 +13,7 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 
 from config import get_settings
 from services.logging_utils import get_llm_response_logger
+from services.openrouter_client import OpenRouterClient
 
 logger = logging.getLogger(__name__)
 llm_response_logger = get_llm_response_logger()
@@ -31,13 +32,35 @@ class VLLMClient:
 
     def __init__(self) -> None:
         settings = get_settings()
-        if not settings.vllm_base_url:
-            raise ValueError("VLLM_BASE_URL is missing. Set it in your environment or .env file.")
+        self._fallback_client: OpenRouterClient | None = None
+        self._fallback_mode = False
 
-        self.base_url = settings.vllm_base_url.rstrip("/")
+        self.base_url = settings.vllm_base_url.rstrip("/") if settings.vllm_base_url else ""
         self.api_key = settings.vllm_api_key
         self.timeout = settings.vllm_timeout_seconds
-        self.model = self._resolve_model(settings.vllm_model)
+        self.model = ""
+
+        if not self.base_url:
+            logger.warning("VLLM_BASE_URL is missing; falling back to OpenRouter.")
+            self._init_fallback()
+            return
+
+        try:
+            self.model = self._resolve_model(settings.vllm_model)
+        except Exception as exc:
+            logger.exception("vLLM not available; falling back to OpenRouter: %s", exc)
+            self._init_fallback()
+
+    def _init_fallback(self) -> None:
+        try:
+            self._fallback_client = OpenRouterClient()
+            self._fallback_mode = True
+            self.model = self._fallback_client.model
+        except Exception as exc:
+            raise ValueError(
+                "vLLM is unavailable and OpenRouter is not configured. "
+                "Set OPENROUTER_API_KEY and OPENROUTER_MODEL."
+            ) from exc
 
     def _resolve_model(self, configured_model: str | None) -> str:
         model = (configured_model or "").strip()
@@ -113,6 +136,15 @@ class VLLMClient:
     ) -> VLLMResult:
         """Call vLLM chat completions endpoint."""
 
+        if self._fallback_mode and self._fallback_client:
+            result = self._fallback_client.chat(
+                messages,
+                temperature=temperature,
+                response_format=response_format,
+                max_tokens=max_tokens,
+            )
+            return VLLMResult(text=result.text, raw=result.raw)
+
         payload: dict[str, Any] = {
             "model": self.model,
             "messages": messages,
@@ -121,13 +153,24 @@ class VLLMClient:
         }
         if response_format:
             payload["response_format"] = response_format
-
-        data = self._post_json("/chat/completions", payload)
-        choice = (data.get("choices") or [{}])[0]
-        message = choice.get("message") or {}
-        text = message.get("content") or ""
-        self._log_response(text, data)
-        return VLLMResult(text=text, raw=data)
+        try:
+            data = self._post_json("/chat/completions", payload)
+            choice = (data.get("choices") or [{}])[0]
+            message = choice.get("message") or {}
+            text = message.get("content") or ""
+            self._log_response(text, data)
+            return VLLMResult(text=text, raw=data)
+        except Exception as exc:
+            logger.exception("vLLM chat failed; falling back to OpenRouter: %s", exc)
+            if not self._fallback_client:
+                self._init_fallback()
+            result = self._fallback_client.chat(
+                messages,
+                temperature=temperature,
+                response_format=response_format,
+                max_tokens=max_tokens,
+            )
+            return VLLMResult(text=result.text, raw=result.raw)
 
     def _log_response(self, text: str, raw: dict[str, Any]) -> None:
         payload = {
@@ -152,6 +195,14 @@ class VLLMClient:
     ) -> dict[str, Any]:
         """Generate JSON output with best-effort parsing."""
 
+        if self._fallback_mode and self._fallback_client:
+            return self._fallback_client.generate_json(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                max_tokens=max_tokens,
+                fallback=fallback,
+            )
+
         fallback = fallback or {}
         messages = [
             {"role": "system", "content": system_prompt},
@@ -164,11 +215,22 @@ class VLLMClient:
                 response_format={"type": "json_object"},
                 max_tokens=max_tokens,
             )
+            return self.safe_json_loads(result.text, fallback=fallback)
         except Exception as exc:
             logger.warning("vLLM response_format failed, retrying without it: %s", exc)
-            result = self.chat(messages, max_tokens=max_tokens)
-
-        return self.safe_json_loads(result.text, fallback=fallback)
+            try:
+                result = self.chat(messages, max_tokens=max_tokens)
+                return self.safe_json_loads(result.text, fallback=fallback)
+            except Exception as chat_exc:
+                logger.exception("vLLM generate_json failed; falling back to OpenRouter: %s", chat_exc)
+                if not self._fallback_client:
+                    self._init_fallback()
+                return self._fallback_client.generate_json(
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    max_tokens=max_tokens,
+                    fallback=fallback,
+                )
 
     def _post_json(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
         url = f"{self.base_url}{path}"

@@ -6,7 +6,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from db.models import Dish
+from db.models import Dish, HistoryEntry, User
 
 
 def get_dish_by_name(db: Session, dish_name: str) -> Dish | None:
@@ -63,6 +63,105 @@ def list_dishes(
     total = base_query.count()
     items = (
         base_query.order_by(Dish.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+    return items, total
+
+
+def get_user_by_id(db: Session, user_id: int) -> User | None:
+    """Fetch a user by primary key."""
+
+    return db.query(User).filter(User.id == user_id).first()
+
+
+def get_user_by_google_sub(db: Session, google_sub: str) -> User | None:
+    """Fetch a user by Google subject."""
+
+    return db.query(User).filter(User.google_sub == google_sub.strip()).first()
+
+
+def get_user_by_email(db: Session, email: str) -> User | None:
+    """Fetch a user by email."""
+
+    return db.query(User).filter(User.email.ilike(email.strip())).first()
+
+
+def upsert_user(
+    db: Session,
+    *,
+    google_sub: str,
+    email: str,
+    name: str | None,
+    picture_url: str | None,
+) -> User:
+    """Insert or update a user by Google subject or email."""
+
+    existing = get_user_by_google_sub(db, google_sub) or get_user_by_email(db, email)
+    if existing:
+        existing.google_sub = google_sub or existing.google_sub
+        existing.email = email or existing.email
+        if name:
+            existing.name = name
+        if picture_url:
+            existing.picture_url = picture_url
+        db.add(existing)
+        db.commit()
+        db.refresh(existing)
+        return existing
+
+    user = User(
+        google_sub=google_sub.strip(),
+        email=email.strip(),
+        name=name or "",
+        picture_url=picture_url or "",
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+def create_history_entry(
+    db: Session,
+    *,
+    user_id: int,
+    entry_type: str,
+    title: str,
+    payload: dict[str, Any],
+) -> HistoryEntry:
+    """Persist one user activity history entry."""
+
+    entry = HistoryEntry(
+        user_id=user_id,
+        type=entry_type.strip(),
+        title=title.strip(),
+        payload=payload or {},
+    )
+    db.add(entry)
+    db.commit()
+    db.refresh(entry)
+    return entry
+
+
+def list_history_entries(
+    db: Session,
+    *,
+    user_id: int,
+    entry_type: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> tuple[list[HistoryEntry], int]:
+    """List history entries for a user."""
+
+    base_query = db.query(HistoryEntry).filter(HistoryEntry.user_id == user_id)
+    if entry_type:
+        base_query = base_query.filter(HistoryEntry.type == entry_type.strip())
+
+    total = base_query.count()
+    items = (
+        base_query.order_by(HistoryEntry.created_at.desc())
         .offset(offset)
         .limit(limit)
         .all()
