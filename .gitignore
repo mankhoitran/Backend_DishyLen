@@ -12,6 +12,7 @@ agent_vllm/food_agent.db
 menu_test_image/
 demo/
 qwen/.venv/
+.env
 logs
 demo/
 food_agent.db
