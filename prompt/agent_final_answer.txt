@@ -1,2 +1,0 @@
-Normalize the following context into strict JSON keys: dish, spicy_level, macros, summary, image_url, source.
-Context: {collected_context}

@@ -11,7 +11,7 @@ from typing import Any
 
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
-from config import get_settings
+from configs.configs import get_settings
 from services.logging_utils import get_llm_response_logger
 
 logger = logging.getLogger(__name__)

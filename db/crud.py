@@ -123,6 +123,44 @@ def upsert_user(
     return user
 
 
+def update_user_profile(db: Session, user_id: int, allergies: str | None) -> User | None:
+    """Update a user's personalized profile details."""
+    user = get_user_by_id(db, user_id)
+    if user:
+        user.allergies = allergies or ""
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+    return user
+
+
+def add_user_allergy(db: Session, user_id: int, new_allergies: str) -> User | None:
+    """Append new text to a user's existing allergies profile."""
+    user = get_user_by_id(db, user_id)
+    if not user:
+        return None
+    
+    if not new_allergies.strip():
+        return user
+
+    current_items = [a.strip() for a in user.allergies.split(',')] if user.allergies else []
+    current_lower = {a.lower() for a in current_items}
+    
+    new_items = [a.strip() for a in new_allergies.split(',')]
+    
+    for item in new_items:
+        if item and item.lower() not in current_lower:
+            current_items.append(item)
+            current_lower.add(item.lower())
+            
+    user.allergies = ", ".join(current_items)
+        
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return user
+
+
 def create_history_entry(
     db: Session,
     *,

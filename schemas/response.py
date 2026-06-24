@@ -16,6 +16,7 @@ class DishResponse(BaseModel):
     summary: str = Field(default="")
     image_url: str = Field(default="")
     source: Literal["database", "search"]
+    allergyWarning: bool = Field(default=False)
 
 
 class UserResponse(BaseModel):
@@ -27,6 +28,7 @@ class UserResponse(BaseModel):
     email: str
     name: str
     picture_url: str
+    allergies: str = ""
 
 
 class AuthResponse(BaseModel):
@@ -34,6 +36,12 @@ class AuthResponse(BaseModel):
 
     access_token: str
     token_type: str = Field(default="bearer")
+    user: UserResponse
+
+
+class ProfileUpdateResponse(BaseModel):
+    """Response payload for updated user profile."""
+
     user: UserResponse
 
 
@@ -97,3 +105,22 @@ class MenuScanResponse(BaseModel):
     ocr_status: str
     ocr_text: str
     items: list[DishResponse] = Field(default_factory=list)
+
+class SummaryFields(BaseModel):
+    description: str = Field(default="")
+    summary: str = Field(default="")
+    calories: float = Field(default=0.0)
+    protein: float = Field(default=0.0)
+    carbs: float = Field(default=0.0)
+    fats: float = Field(default=0.0)
+    ingredients: list[str] = Field(default_factory=list)
+    allergens: list[str] = Field(default_factory=list)
+    allergyWarning: bool = Field(default=False)
+
+
+class TranslationResponse(BaseModel):
+    """Response payload for text translation."""
+
+    original_text: str
+    translated_text: str
+    target_language: str

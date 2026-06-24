@@ -1,7 +1,0 @@
-Return ONLY JSON with keys: description, summary, calories, protein, carbs, fats, ingredients, allergens.
-Description must be one concise diner-friendly paragraph under {max_words} words.
-Summary must be one short sentence under 30 words.
-Calories, protein, carbs, fats must be numbers or null.
-Ingredients and allergens must be arrays of strings (empty if unknown).
-Text:
-{text}

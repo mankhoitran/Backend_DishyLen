@@ -7,11 +7,11 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from agent_vllm.parser import parse_input
-from config import get_settings
-from .search import DuckDuckGoSearchService
-from .tools import VLLMAgentTools
-from .vllm_client import VLLMClient
+from agent.parser import parse_input
+from configs.configs import get_settings
+from agent.search import DuckDuckGoSearchService
+from agent.tools import VLLMAgentTools
+from agent.clients.vllm_client import VLLMClient
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +28,7 @@ class VLLMFoodAgent:
         )
         self.tools = VLLMAgentTools(db=db, search_service=self.search_service)
 
-    def run(self, query: str, target_language: str | None = None) -> dict[str, Any]:
+    def run(self, query: str, target_language: str | None = None, user_allergies: str | None = None) -> dict[str, Any]:
         """Execute end-to-end dish information workflow."""
 
         parsed = parse_input(query)
@@ -67,7 +67,7 @@ class VLLMFoodAgent:
                     self.tools.get_spicy_level(parsed.dish_name),
                 )
 
-            if self._macros_missing(collected.get("macros")):
+            if self._macros_missing(collected):
                 collected = self._merge_collected(
                     collected,
                     self.tools.get_dish_macro(parsed.dish_name),
@@ -85,6 +85,15 @@ class VLLMFoodAgent:
                     self.tools.get_dish_image_url(parsed.dish_name),
                 )
 
+        if user_allergies and collected.get("ingredients"):
+            allergy_check = self.tools.check_allergy(
+                collected.get("dish", parsed.dish_name),
+                collected["ingredients"],
+                user_allergies
+            )
+            collected["allergyWarning"] = allergy_check.get("allergyWarning", False)
+            collected["allergens"] = allergy_check.get("allergens", [])
+
         if target_language and collected.get("summary"):
             translated = self.tools.translate(collected["summary"], target_language)
             collected["summary"] = translated.get("translated_text", collected["summary"])
@@ -93,7 +102,12 @@ class VLLMFoodAgent:
             self.tools.persist_dish(
                 dish_name=collected.get("dish", parsed.dish_name),
                 spicy_level=collected.get("spicy_level", "unknown"),
-                macros=collected.get("macros", {}),
+                macros={
+                    "calories_kcal": collected.get("calories"),
+                    "protein_g": collected.get("protein"),
+                    "carbs_g": collected.get("carbs"),
+                    "fat_g": collected.get("fats"),
+                },
                 summary=collected.get("summary", ""),
             )
 
@@ -144,12 +158,9 @@ class VLLMFoodAgent:
         return merged
 
     @staticmethod
-    def _macros_missing(macros: dict[str, Any] | None) -> bool:
-        if not isinstance(macros, dict) or not macros:
-            return True
-
-        required = ["calories_kcal", "protein_g", "carbs_g", "fat_g"]
-        values = [macros.get(key) for key in required]
+    def _macros_missing(existing: dict[str, Any]) -> bool:
+        required = ["calories", "protein", "carbs", "fats"]
+        values = [existing.get(key) for key in required]
         return all(value in (None, "", "unknown") for value in values)
 
     @staticmethod
@@ -159,7 +170,6 @@ class VLLMFoodAgent:
 
         summary = existing.get("summary")
         spicy_level = existing.get("spicy_level")
-        macros = existing.get("macros")
 
         if not summary or summary.strip() in ("No summary found.", "No sources found."):
             return True
@@ -167,4 +177,4 @@ class VLLMFoodAgent:
         if spicy_level in (None, "", "unknown"):
             return True
 
-        return VLLMFoodAgent._macros_missing(macros)
+        return VLLMFoodAgent._macros_missing(existing)

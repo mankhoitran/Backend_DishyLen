@@ -11,9 +11,9 @@ from typing import Any
 
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
-from config import get_settings
+from configs.configs import get_settings
 from services.logging_utils import get_llm_response_logger
-from services.openrouter_client import OpenRouterClient
+from agent.clients.openrouter_client import OpenRouterClient
 
 logger = logging.getLogger(__name__)
 llm_response_logger = get_llm_response_logger()
@@ -28,7 +28,10 @@ class VLLMResult:
 
 
 class VLLMClient:
-    """Wrapper around a vLLM OpenAI-compatible chat API."""
+    """Wrapper around a vLLM OpenAI-compatible chat API.
+
+    Automatically falls back to OpenRouter when vLLM is unavailable.
+    """
 
     def __init__(self) -> None:
         settings = get_settings()

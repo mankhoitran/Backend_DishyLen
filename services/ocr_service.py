@@ -8,7 +8,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
-from .parser import parse_input
+from prompt.prompts import OCR as OCR_PROMPTS
+
+from agent.parser import parse_input
 
 logger = logging.getLogger(__name__)
 
@@ -38,19 +40,7 @@ PRICE_PATTERN = re.compile(
 SEPARATOR_PATTERN = re.compile(r"\s*\|\s*|\s*/\s*|\s{2,}")
 CURRENCY_PATTERN = re.compile(r"[$€£]|vnd|usd", flags=re.IGNORECASE)
 
-OCR_PROMPT_TEMPLATE = (
-    "You are an OCR post-processor for menu images. Use the OCR text provided below as the only source.\n"
-    "Return ONLY a strict JSON object with exactly one key: items. "
-    "No extra keys, no markdown, no commentary.\n"
-    "Step 1: Extract ONLY dish names and food/drink item names. Completely ignore prices, currency symbols, "
-    "numbers, and headers like 'Menu' or 'Beverages'. Preserve the original reading order (top-to-bottom, "
-    "left-to-right).\n"
-    "Step 2: Correct the extracted items. Fix spelling errors, Vietnamese diacritics where applicable, and "
-    "obvious OCR errors (e.g., 'Bow!' -> 'Bowl', 'eed Tea' -> 'Iced Tea'). Do NOT add or remove items.\n"
-    "Each item must be a separate array element. Never combine multiple items into one string.\n"
-    "Output schema example: {{\"items\": [\"Dish A\", \"Dish B\"]}}\n"
-    "OCR text:\n{ocr_text}"
-)
+# OCR prompt constants are defined in prompt/prompts.py (OCR class).
 
 
 @dataclass
@@ -142,6 +132,7 @@ def apply_ocr_prompt(
     ocr_text: str,
     fallback_items: Iterable[str] | None = None,
     prefer_backend: str = "auto",
+    user_allergies: str | None = None,
 ) -> dict[str, str]:
     """Use an LLM to format OCR output with normalized menu items."""
 
@@ -149,15 +140,15 @@ def apply_ocr_prompt(
         "raw_text": _normalize_ocr_text(ocr_text),
         "corrected_text": _items_to_lines(fallback_items),
     }
-    prompt = _build_ocr_prompt(ocr_text)
+    prompt = _build_ocr_prompt(ocr_text, user_allergies)
 
     if prefer_backend in {"auto", "vllm"}:
         try:
-            from .vllm_client import VLLMClient
+            from agent.clients.vllm_client import VLLMClient
 
             vllm_client = VLLMClient()
             payload = vllm_client.generate_json(
-                system_prompt="You are a strict OCR post-processor.",
+                system_prompt=OCR_PROMPTS.SYSTEM,
                 user_prompt=prompt,
                 max_tokens=1200,
                 fallback=fallback,
@@ -170,11 +161,11 @@ def apply_ocr_prompt(
 
     if prefer_backend in {"auto", "openrouter"}:
         try:
-            from services.openrouter_client import OpenRouterClient
+            from agent.clients.openrouter_client import OpenRouterClient
 
             openrouter_client = OpenRouterClient()
             payload = openrouter_client.generate_json(
-                system_prompt="You are a strict OCR post-processor.",
+                system_prompt=OCR_PROMPTS.SYSTEM,
                 user_prompt=prompt,
                 max_tokens=1200,
                 fallback=fallback,
@@ -257,8 +248,11 @@ def _is_heading(line: str) -> bool:
     return False
 
 
-def _build_ocr_prompt(ocr_text: str) -> str:
-    return OCR_PROMPT_TEMPLATE.format(ocr_text=(ocr_text or "").strip())
+def _build_ocr_prompt(ocr_text: str, user_allergies: str | None = None) -> str:
+    return OCR_PROMPTS.PROMPT_TEMPLATE.format(
+        ocr_text=ocr_text,
+        user_allergies=user_allergies or "None"
+    )
 
 
 def _normalize_ocr_text(text: str) -> str:

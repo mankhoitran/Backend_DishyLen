@@ -36,7 +36,9 @@ class Settings(BaseSettings):
     cors_origins: str = Field(
         default=(
             "http://localhost:8080,http://127.0.0.1:8080,"
-            "http://localhost:5173,http://127.0.0.1:5173"
+            "http://localhost:5173,http://127.0.0.1:5173,"
+            "http://[IP_ADDRESS],"
+            "https://accounts.google.com"
         ),
         alias="CORS_ORIGINS",
     )
@@ -48,7 +50,7 @@ class Settings(BaseSettings):
     )
 
     max_agent_steps: int = 6
-    gemini_timeout_seconds: int = 45
+    gemini_timeout_seconds: int = 600
     gemini_call_pause_seconds: int = Field(default=1, alias="GEMINI_CALL_PAUSE_SECONDS")
 
 

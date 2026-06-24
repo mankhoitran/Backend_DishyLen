@@ -18,3 +18,6 @@ food_agent.db
 demo.tar.gz
 gpu_test.py
 uploads/
+.env
+.pytest_cache/
+venv_test

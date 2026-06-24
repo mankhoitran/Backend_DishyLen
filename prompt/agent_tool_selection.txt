@@ -1,8 +1,0 @@
-User query: {user_query}
-Extracted dish name: {dish_name}
-Use tools in this order when needed:
-1) get_processed_dish
-2) If missing, search_dish
-3) Fill gaps with get_spicy_level/get_dish_macro/get_dish_summary/get_dish_image_url
-{translation_note}
-When done, output strict JSON only.

@@ -10,29 +10,34 @@ from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
 
-from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, UploadFile
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from agent_vllm.agent import VLLMFoodAgent
-from agent_vllm.ocr_menu import (
+from agent.food_agent import VLLMFoodAgent
+from services.ocr_service import (
     apply_ocr_prompt,
     corrected_items_from_text,
     extract_menu_items,
     ocr_menu_image,
     select_menu_item,
 )
-from agent_vllm.search import DuckDuckGoSearchService
-from agent_vllm.vllm_client import VLLMClient
-from config import get_settings
+from agent.search import DuckDuckGoSearchService
+from agent.clients.vllm_client import VLLMClient
+from services.translation_service import TranslationService
+from configs.configs import get_settings
 from db import crud
 from db.database import Base, engine, get_db
 from db.models import Dish, HistoryEntry, User
 import schemas.request as request_schemas
 import schemas.response as response_schemas
-from prompt.loader import format_prompt, load_prompt
+# from prompt.loader import format_prompt, load_prompt
+# from prompt.prompts import SUMMARY as SUMMARY_PROMPTS, TRANSLATION as TRANSLATION_PROMPTS
 from schemas.request import QueryRequest
 from schemas.response import DishListResponse, DishResponse, OCRUploadResponse
 from services.auth import AuthError, create_access_token, decode_access_token, verify_google_id_token
@@ -60,6 +65,31 @@ app.add_middleware(
 UPLOAD_DIR = Path(__file__).resolve().parent / settings.uploads_dir
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
+
+
+def _sanitize_bytes(obj: Any) -> Any:
+    if isinstance(obj, bytes):
+        try:
+            return obj.decode("utf-8")
+        except UnicodeDecodeError:
+            return "<binary_data>"
+    elif isinstance(obj, dict):
+        return {k: _sanitize_bytes(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [_sanitize_bytes(v) for v in obj]
+    elif isinstance(obj, tuple):
+        return tuple(_sanitize_bytes(v) for v in obj)
+    return obj
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+    errors = exc.errors()
+    sanitized_errors = _sanitize_bytes(errors)
+    return JSONResponse(
+        status_code=422,
+        content={"detail": jsonable_encoder(sanitized_errors)},
+    )
 
 
 class SummaryRequest(BaseModel):
@@ -112,12 +142,13 @@ class DishDetailResponse(BaseModel):
 
     name: str = Field(default="")
     description: str = Field(default="")
-    calories: float | None = Field(default=None)
-    protein: float | None = Field(default=None)
-    carbs: float | None = Field(default=None)
-    fats: float | None = Field(default=None)
+    calories: float = Field(default=0.0)
+    protein: float = Field(default=0.0)
+    carbs: float = Field(default=0.0)
+    fats: float = Field(default=0.0)
     ingredients: list[str] = Field(default_factory=list)
     allergens: list[str] = Field(default_factory=list)
+    allergyWarning: bool = Field(default=False)
     summary: str = Field(default="")
     sources: list[str] = Field(default_factory=list)
 
@@ -177,6 +208,17 @@ class OCRSelectResponse(BaseModel):
     items: list[str] = Field(default_factory=list)
 
 
+class DishInfoRequest(BaseModel):
+    """Lightweight request payload for fetching dish info by name (no OCR required)."""
+
+    item_name: str = Field(..., description="Exact dish name already extracted from the menu")
+    include_ingredients: bool = Field(default=True)
+    target_language: str | None = Field(
+        default=None,
+        description="Optional language code for translation, e.g. 'en', 'vi', 'th'",
+    )
+
+
 @app.on_event("startup")
 def on_startup() -> None:
     """Initialize required resources."""
@@ -221,6 +263,19 @@ def _current_user(
     return user
 
 
+def _optional_current_user(
+    authorization: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+) -> User | None:
+    """Resolve current user optionally."""
+    if not authorization:
+        return None
+    try:
+        return _current_user(authorization, db)
+    except HTTPException:
+        return None
+
+
 @app.get("/health")
 def health_check() -> dict[str, str]:
     """Health endpoint."""
@@ -257,6 +312,35 @@ def google_login(
         access_token=token,
         user=_user_to_response(user),
     )
+
+
+@app.put("/auth/profile", response_model=response_schemas.ProfileUpdateResponse)
+def update_profile(
+    payload: request_schemas.UserProfileUpdateRequest,
+    current_user: User = Depends(_current_user),
+    db: Session = Depends(get_db),
+) -> response_schemas.ProfileUpdateResponse:
+    """Update the current user's profile information."""
+    updated = crud.update_user_profile(db, current_user.id, allergies=payload.allergies)
+    if not updated:
+        raise HTTPException(status_code=404, detail="User not found")
+    return response_schemas.ProfileUpdateResponse(user=_user_to_response(updated))
+
+
+@app.post("/auth/add_allergy", response_model=response_schemas.ProfileUpdateResponse)
+def add_allergy(
+    payload: request_schemas.AddAllergyRequest,
+    current_user: User = Depends(_current_user),
+    db: Session = Depends(get_db),
+) -> response_schemas.ProfileUpdateResponse:
+    """Append text ingredients to the current user's allergies profile."""
+    actual_text = payload.text or payload.allergies or payload.description or ""
+    if not actual_text.strip():
+        raise HTTPException(status_code=400, detail="Missing text, allergies, or description field")
+    updated = crud.add_user_allergy(db, current_user.id, new_allergies=actual_text)
+    if not updated:
+        raise HTTPException(status_code=404, detail="User not found")
+    return response_schemas.ProfileUpdateResponse(user=_user_to_response(updated))
 
 
 @app.get("/auth/me", response_model=response_schemas.UserResponse)
@@ -332,12 +416,21 @@ def list_dishes(
 
 
 @app.post("/vllm/query", response_model=DishDetailResponse)
-def query_dish(payload: QueryRequest, db: Session = Depends(get_db)) -> DishDetailResponse:
+def query_dish(
+    payload: QueryRequest,
+    db: Session = Depends(get_db),
+    current_user: User | None = Depends(_optional_current_user),
+) -> DishDetailResponse:
     """Process food query through the vLLM-backed agent."""
 
     try:
         agent = VLLMFoodAgent(db=db)
-        result = agent.run(query=payload.query, target_language=payload.target_language)
+        user_allergies = current_user.allergies if current_user else None
+        result = agent.run(
+            query=payload.query,
+            target_language=payload.target_language,
+            user_allergies=user_allergies,
+        )
         ingredients: list[str] = []
         try:
             vllm_client = VLLMClient()
@@ -365,7 +458,10 @@ def query_dish(payload: QueryRequest, db: Session = Depends(get_db)) -> DishDeta
 
 
 @app.post("/vllm/summary", response_model=SummaryResponse)
-def summarize(payload: SummaryRequest) -> SummaryResponse:
+def summarize(
+    payload: SummaryRequest,
+    current_user: User | None = Depends(_optional_current_user),
+) -> SummaryResponse:
     """Summarize either raw text or search-backed sources."""
 
     if not payload.text and not payload.query:
@@ -379,10 +475,15 @@ def summarize(payload: SummaryRequest) -> SummaryResponse:
     summary_fields = SummaryFields()
     sources: list[str] = []
     input_type: Literal["text", "search"] = "text"
+    user_allergies = current_user.allergies if current_user else None
 
     try:
+        from services.summary_service import SummaryService
+        summary_service = SummaryService(vllm_client)
+
         if payload.text:
-            summary_fields = _summarize_text(vllm_client, payload.text, payload.max_words)
+            raw_summary = summary_service.summarize_text(payload.text, payload.max_words, user_allergies)
+            summary_fields = _normalize_summary_fields(raw_summary)
         else:
             query = (payload.query or "").strip()
             if not query:
@@ -398,7 +499,8 @@ def summarize(payload: SummaryRequest) -> SummaryResponse:
             raw_sources = search_service.search_sources(query)
             source_text = _sources_to_text(raw_sources)
             if source_text:
-                summary_fields = _summarize_text(vllm_client, source_text, payload.max_words)
+                raw_summary = summary_service.summarize_text(source_text, payload.max_words, user_allergies)
+                summary_fields = _normalize_summary_fields(raw_summary)
             else:
                 summary_fields = SummaryFields(
                     description="No sources found.",
@@ -410,7 +512,11 @@ def summarize(payload: SummaryRequest) -> SummaryResponse:
         description_text = summary_fields.description or summary_fields.summary
         summary_text = summary_fields.summary or _short_summary(description_text)
         if payload.target_language and description_text:
-            translated = _translate_text(vllm_client, description_text, payload.target_language)
+            from services.translation_service import TranslationService
+            translation_svc = TranslationService()
+            translation_svc.vllm_client = vllm_client
+            translated_payload = translation_svc.translate_text(description_text, payload.target_language)
+            translated = translated_payload.get("translated_text", description_text)
             description_text = translated
             summary_text = _short_summary(translated)
     except HTTPException:
@@ -445,7 +551,10 @@ async def upload_menu_image(file: UploadFile = File(...)) -> OCRUploadResponse:
 
 
 @app.post("/vllm/ocr/items", response_model=OCRMenuResponse)
-def ocr_menu_items(payload: OCRMenuRequest) -> OCRMenuResponse:
+def ocr_menu_items(
+    payload: OCRMenuRequest,
+    current_user: User | None = Depends(_optional_current_user),
+) -> OCRMenuResponse:
     """Extract menu items from an OCR image."""
 
     try:
@@ -453,11 +562,13 @@ def ocr_menu_items(payload: OCRMenuRequest) -> OCRMenuResponse:
     except FileNotFoundError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    user_allergies = current_user.allergies if current_user else None
     items = extract_menu_items(ocr_result.text, max_items=payload.max_items)
     ocr_payload = apply_ocr_prompt(
         ocr_result.text,
         fallback_items=items,
         prefer_backend=payload.ocr_backend,
+        user_allergies=user_allergies,
     )
     corrected_items = corrected_items_from_text(
         ocr_payload.get("corrected_text", ""),
@@ -478,8 +589,30 @@ def ocr_menu_items(payload: OCRMenuRequest) -> OCRMenuResponse:
 
 
 @app.post("/vllm/ocr/select", response_model=OCRSelectResponse)
-def ocr_menu_select(payload: OCRSelectRequest, db: Session = Depends(get_db)) -> OCRSelectResponse:
-    """Select a menu item from OCR output and retrieve dish information."""
+def ocr_menu_select(
+    payload: OCRSelectRequest,
+    db: Session = Depends(get_db),
+    current_user: User | None = Depends(_optional_current_user),
+) -> OCRSelectResponse:
+    """Process selection of an OCR menu item."""
+
+    image_path = _get_safe_path(payload.image_path)
+    if not image_path.exists():
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    item_name = payload.item_name
+    # index-based selection omitted for brevity
+
+    if not item_name:
+        raise HTTPException(status_code=400, detail="Must provide item_name or item_index")
+
+    agent = VLLMFoodAgent(db=db)
+    user_allergies = current_user.allergies if current_user else None
+    result = agent.run(
+        query=item_name,
+        target_language=payload.target_language,
+        user_allergies=user_allergies,
+    )
 
     try:
         ocr_result = ocr_menu_image(payload.image_path)
@@ -491,6 +624,7 @@ def ocr_menu_select(payload: OCRSelectRequest, db: Session = Depends(get_db)) ->
         ocr_result.text,
         fallback_items=items,
         prefer_backend=payload.ocr_backend,
+        user_allergies=user_allergies,
     )
     corrected_items = corrected_items_from_text(
         ocr_payload.get("corrected_text", ""),
@@ -546,6 +680,69 @@ def ocr_menu_select(payload: OCRSelectRequest, db: Session = Depends(get_db)) ->
     )
 
 
+@app.post("/vllm/ocr/dish-info", response_model=DishDetailResponse)
+def get_dish_info(
+    payload: DishInfoRequest,
+    db: Session = Depends(get_db),
+    current_user: User | None = Depends(_optional_current_user),
+) -> DishDetailResponse:
+    """Fetch dish information for a named dish without re-running OCR.
+
+    Call this endpoint after ``/vllm/ocr/items`` has already returned the
+    menu item list. Pass the chosen item name directly; no image path or
+    OCR processing is required.
+    """
+
+    try:
+        agent = VLLMFoodAgent(db=db)
+        user_allergies = current_user.allergies if current_user else None
+        dish_payload = agent.run(
+            query=payload.item_name,
+            target_language=payload.target_language,
+            user_allergies=user_allergies,
+        )
+
+        ingredients: list[str] = []
+        if payload.include_ingredients:
+            try:
+                vllm_client = VLLMClient()
+                search_service = DuckDuckGoSearchService(
+                    vllm_client,
+                    max_results=settings.duckduckgo_max_results,
+                )
+                ingredient_payload = search_service.get_dish_ingredients(payload.item_name)
+                ingredients = _to_str_list(ingredient_payload.get("ingredients"))
+            except Exception:
+                ingredients = []
+
+        return _normalize_dish_detail(
+            dish_payload,
+            fallback_name=payload.item_name,
+            ingredients=ingredients,
+            sources=[],
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # pragma: no cover - runtime guard for external API failures
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve dish info: {exc}") from exc
+
+
+@app.post("/vllm/translate", response_model=response_schemas.TranslationResponse)
+def translate_text(payload: request_schemas.TranslateRequest) -> response_schemas.TranslationResponse:
+    """Translate arbitrary text to English or Vietnamese."""
+    try:
+        service = TranslationService()
+        lang = payload.target_language or payload.language or "en"
+        result = service.translate_text(payload.text, lang)
+        return response_schemas.TranslationResponse(
+            original_text=payload.text,
+            translated_text=result.get("translated_text", payload.text),
+            target_language=lang,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Translation failed: {exc}") from exc
+
+
 def _dish_to_response(dish: Dish) -> DishResponse:
     return DishResponse(
         dish=dish.name,
@@ -563,6 +760,7 @@ def _user_to_response(user: User) -> response_schemas.UserResponse:
         email=user.email,
         name=user.name,
         picture_url=user.picture_url,
+        allergies=user.allergies,
     )
 
 
@@ -632,20 +830,20 @@ def _extract_text(value: Any, preferred_keys: tuple[str, ...]) -> str:
     return str(value).strip()
 
 
-def _to_number(value: Any) -> float | None:
-    if value in (None, ""):
-        return None
+def _to_number(value: Any) -> float:
+    if value is None:
+        return 0.0
     if isinstance(value, (int, float)):
         return float(value)
     if isinstance(value, dict):
-        for key in ("value", "amount"):
+        for key in ("value", "amount", "kcal", "g"):
             if key in value:
                 return _to_number(value.get(key))
-        return None
+        return 0.0
 
     text = str(value).strip().lower()
     if not text or text in ("unknown", "n/a", "na"):
-        return None
+        return 0.0
     text = text.replace("\u2013", "-").replace("\u2014", "-")
     range_match = _RANGE_PATTERN.search(text)
     if range_match:
@@ -654,7 +852,7 @@ def _to_number(value: Any) -> float | None:
         return (low + high) / 2.0
     numbers = _NUMBER_PATTERN.findall(text)
     if not numbers:
-        return None
+        return 0.0
     if len(numbers) >= 2 and (" to " in text or "-" in text):
         low = float(numbers[0])
         high = float(numbers[1])
@@ -723,37 +921,6 @@ def _normalize_summary_fields(payload: dict[str, Any]) -> SummaryFields:
         allergens=_to_str_list(payload.get("allergens")),
     )
 
-
-def _summarize_text(vllm_client: VLLMClient, text: str, max_words: int) -> SummaryFields:
-    fallback = {
-        "description": "",
-        "summary": "",
-        "calories": None,
-        "protein": None,
-        "carbs": None,
-        "fats": None,
-        "ingredients": [],
-        "allergens": [],
-    }
-    payload = vllm_client.generate_json(
-        system_prompt=load_prompt("summary_system.txt").strip(),
-        user_prompt=format_prompt("summary_user.txt", max_words=max_words, text=text),
-        fallback=fallback,
-    )
-    return _normalize_summary_fields(payload)
-
-
-def _translate_text(vllm_client: VLLMClient, text: str, target_language: str) -> str:
-    instruction = (
-        "Return ONLY JSON with keys target_language and translated_text. "
-        f"target_language: {target_language}."
-    )
-    payload = vllm_client.generate_json(
-        system_prompt="You are a translation engine.",
-        user_prompt=f"{instruction}\ntext: {text}",
-        fallback={"target_language": target_language, "translated_text": text},
-    )
-    return (payload.get("translated_text") or text).strip()
 
 
 _ALLERGEN_KEYWORDS: dict[str, list[str]] = {

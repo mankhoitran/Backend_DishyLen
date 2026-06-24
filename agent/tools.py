@@ -8,7 +8,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from db import crud
-from .search import DuckDuckGoSearchService
+from agent.search import DuckDuckGoSearchService
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +43,11 @@ class VLLMAgentTools:
         payload = self.search_service.search_dish(dish_name)
         payload["source"] = "search"
         return payload
+
+    def check_allergy(self, dish_name: str, ingredients: list[str], user_allergies: str) -> dict[str, Any]:
+        """Check if dish ingredients conflict with user allergies."""
+
+        return self.search_service.check_allergy(dish_name, ingredients, user_allergies)
 
     def get_spicy_level(self, dish_name: str) -> dict[str, Any]:
         """Get dish spicy level."""

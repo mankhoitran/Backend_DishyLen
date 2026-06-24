@@ -5,16 +5,16 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from ddgs import DDGS
+from duckduckgo_search import DDGS
 
-from .vllm_client import VLLMClient
+from prompt.prompts import DUCKDUCKGO as DUCKDUCKGO_PROMPTS
+from prompt.prompts import ALLERGY as ALLERGY_PROMPTS
+
+from agent.clients.vllm_client import VLLMClient
 
 logger = logging.getLogger(__name__)
 
-EXTRACTION_SYSTEM_PROMPT = (
-    "You are a culinary data extractor. Use the provided sources when possible. "
-    "Return strict JSON only."
-)
+# System prompt for extraction is now in prompt/prompts.py (DUCKDUCKGO.EXTRACTION_SYSTEM)
 
 
 class DuckDuckGoSearchService:
@@ -25,26 +25,12 @@ class DuckDuckGoSearchService:
         self.max_results = max_results
 
     def search_dish(self, dish_name: str) -> dict[str, Any]:
-        """Retrieve structured dish information using DuckDuckGo sources."""
+        """Search dish information and structured attributes."""
 
         sources = self._search_text(
-            f"{dish_name} dish ingredients spicy level nutrition calories macros"
+            f"{dish_name} dish ingredients spicy level nutrition calories carbs protein fat"
         )
-        instruction = (
-            "Return ONLY JSON with keys: dish, description, summary, calories, protein, carbs, fats, "
-            "ingredients, allergens, spicy_level, macros, image_url. "
-            "description should be factual, 2-3 sentences, under 90 words. "
-            "summary should be one sentence under 30 words. "
-            "calories must be kcal per serving, and protein/carbs/fats must be grams per serving "
-            "(numbers or null). "
-            "ingredients and allergens must be arrays of strings (empty if unknown). "
-            "spicy_level must be one of: not_spicy, mild, medium, hot, very_hot, unknown. "
-            "macros must be an object with keys calories_kcal, protein_g, carbs_g, fat_g "
-            "(numbers or null). "
-            "Avoid mentioning sources or search. "
-            "If sources are empty, description and summary should be 'No sources found.'. "
-            "image_url should be empty if no reliable image appears in sources."
-        )
+        instruction = DUCKDUCKGO_PROMPTS.SEARCH_DISH
         fallback = {
             "dish": dish_name,
             "description": "No sources found.",
@@ -56,12 +42,6 @@ class DuckDuckGoSearchService:
             "ingredients": [],
             "allergens": [],
             "spicy_level": "unknown",
-            "macros": {
-                "calories_kcal": None,
-                "protein_g": None,
-                "carbs_g": None,
-                "fat_g": None,
-            },
             "image_url": "",
         }
         payload = self._ask_json(instruction, sources, fallback)
@@ -75,9 +55,25 @@ class DuckDuckGoSearchService:
         payload.setdefault("ingredients", [])
         payload.setdefault("allergens", [])
         payload.setdefault("spicy_level", "unknown")
-        payload.setdefault("macros", {})
         payload.setdefault("image_url", "")
         return payload
+
+    def check_allergy(self, dish_name: str, ingredients: list[str], user_allergies: str) -> dict[str, Any]:
+        """Check if ingredients conflict with user allergies."""
+        fallback = {"allergyWarning": False, "allergens": []}
+        if not user_allergies or not ingredients:
+            return fallback
+
+        instruction = ALLERGY_PROMPTS.CHECK.format(
+            dish_name=dish_name,
+            ingredients=", ".join(ingredients),
+            user_allergies=user_allergies
+        )
+        return self.vllm_client.generate_json(
+            system_prompt=ALLERGY_PROMPTS.SYSTEM,
+            user_prompt=instruction,
+            fallback=fallback
+        )
 
     def search_sources(self, query: str) -> list[dict[str, Any]]:
         """Return raw DuckDuckGo text sources for a query."""
@@ -88,10 +84,7 @@ class DuckDuckGoSearchService:
         """Extract likely spicy level for a dish."""
 
         sources = self._search_text(f"{dish_name} spicy level heat level")
-        instruction = (
-            "Return ONLY JSON with keys dish and spicy_level. "
-            "spicy_level must be one of: not_spicy, mild, medium, hot, very_hot, unknown."
-        )
+        instruction = DUCKDUCKGO_PROMPTS.GET_SPICY_LEVEL
         fallback = {"dish": dish_name, "spicy_level": "unknown"}
         payload = self._ask_json(instruction, sources, fallback)
         payload.setdefault("dish", dish_name)
@@ -102,27 +95,27 @@ class DuckDuckGoSearchService:
         """Estimate dish macro nutrients."""
 
         sources = self._search_text(f"{dish_name} nutrition calories protein carbs fat")
-        instruction = (
-            "Return ONLY JSON with keys dish and macros. "
-            "macros object keys: calories_kcal, protein_g, carbs_g, fat_g. "
-            "Values numeric or null."
-        )
-        fallback = {"dish": dish_name, "macros": {}}
+        instruction = DUCKDUCKGO_PROMPTS.GET_DISH_MACRO
+        fallback = {
+            "dish": dish_name,
+            "calories": None,
+            "protein": None,
+            "carbs": None,
+            "fats": None,
+        }
         payload = self._ask_json(instruction, sources, fallback)
         payload.setdefault("dish", dish_name)
-        payload.setdefault("macros", {})
+        payload.setdefault("calories", None)
+        payload.setdefault("protein", None)
+        payload.setdefault("carbs", None)
+        payload.setdefault("fats", None)
         return payload
 
     def get_dish_summary(self, dish_name: str) -> dict[str, Any]:
         """Generate concise dish summary."""
 
         sources = self._search_text(f"{dish_name} dish description ingredients")
-        instruction = (
-            "Return ONLY JSON with keys dish and summary. "
-            "summary should be factual, 2-3 sentences, and under 80 words. "
-            "Avoid mentioning sources or search. "
-            "If sources are empty, summary should be 'No sources found.'."
-        )
+        instruction = DUCKDUCKGO_PROMPTS.GET_DISH_SUMMARY
         fallback = {"dish": dish_name, "summary": "No sources found."}
         payload = self._ask_json(instruction, sources, fallback)
         payload.setdefault("dish", dish_name)
@@ -133,11 +126,7 @@ class DuckDuckGoSearchService:
         """Extract common ingredients for a dish."""
 
         sources = self._search_text(f"{dish_name} ingredients list")
-        instruction = (
-            "Return ONLY JSON with keys dish and ingredients. "
-            "ingredients must be an array of strings. "
-            "If sources are empty, ingredients should be an empty array."
-        )
+        instruction = DUCKDUCKGO_PROMPTS.GET_DISH_INGREDIENTS
         fallback = {"dish": dish_name, "ingredients": []}
         payload = self._ask_json(instruction, sources, fallback)
         payload.setdefault("dish", dish_name)
@@ -160,13 +149,10 @@ class DuckDuckGoSearchService:
     def translate(self, text: str, target_language: str) -> dict[str, Any]:
         """Translate text into target language."""
 
-        instruction = (
-            "Return ONLY JSON with keys target_language and translated_text. "
-            f"target_language: {target_language}."
-        )
+        instruction = DUCKDUCKGO_PROMPTS.TRANSLATE.format(target_language=target_language)
         user_prompt = f"text: {text}"
         payload = self.vllm_client.generate_json(
-            system_prompt="You are a translation engine.",
+            system_prompt=DUCKDUCKGO_PROMPTS.TRANSLATE_SYSTEM,
             user_prompt=f"{instruction}\n{user_prompt}",
             fallback={"target_language": target_language, "translated_text": text},
         )
@@ -183,7 +169,7 @@ class DuckDuckGoSearchService:
         source_block = self._format_sources(sources)
         user_prompt = f"{instruction}\nSources:\n{source_block}"
         return self.vllm_client.generate_json(
-            system_prompt=EXTRACTION_SYSTEM_PROMPT,
+            system_prompt=DUCKDUCKGO_PROMPTS.EXTRACTION_SYSTEM,
             user_prompt=user_prompt,
             fallback=fallback,
         )

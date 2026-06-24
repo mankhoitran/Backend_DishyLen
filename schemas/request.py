@@ -49,3 +49,27 @@ class HistoryCreateRequest(BaseModel):
     type: Literal["query", "ocr", "summary"]
     title: str = Field(..., min_length=1, max_length=255)
     payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class TranslateRequest(BaseModel):
+    """Payload for text translation."""
+
+    text: str = Field(..., description="Text to translate")
+    target_language: str | None = Field(
+        default=None, description="Language to translate to"
+    )
+    language: str | None = Field(default=None, description="Alias for target_language")
+
+
+class UserProfileUpdateRequest(BaseModel):
+    """Payload for updating user profile."""
+
+    allergies: str | None = Field(default=None, description="Free-form text describing user allergies")
+
+
+class AddAllergyRequest(BaseModel):
+    """Payload for adding new allergies to a user's profile."""
+
+    text: str | None = Field(default=None, description="Free-form text containing multiple ingredients")
+    allergies: str | None = Field(default=None)
+    description: str | None = Field(default=None)
