@@ -3,7 +3,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from fastapi.testclient import TestClient
 
-from app import app, _current_user
+from app import app
+from api.deps import get_current_user
 from db.database import Base, get_db
 from db.models import User
 
@@ -61,7 +62,7 @@ def auth_client(client, test_user):
     """Test client that is authenticated as test_user."""
     def override_current_user():
         return test_user
-    
-    app.dependency_overrides[_current_user] = override_current_user
+
+    app.dependency_overrides[get_current_user] = override_current_user
     yield client
-    app.dependency_overrides.pop(_current_user, None)
+    app.dependency_overrides.pop(get_current_user, None)

@@ -6,8 +6,6 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import jwt
-from google.auth.transport import requests as google_requests
-from google.oauth2 import id_token as google_id_token
 
 from configs.configs import get_settings
 
@@ -18,39 +16,35 @@ settings = get_settings()
 class AuthError(ValueError):
     """Raised when authentication fails."""
 
+try:
+    import bcrypt
+except ImportError:
+    bcrypt = None
 
-def _audiences() -> list[str]:
-    return [aud.strip() for aud in settings.google_client_id.split(",") if aud.strip()]
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    if not bcrypt:
+        raise AuthError("Password hashing library not installed")
+    
+    # DEBUG: Print the exact password being received
+    print("DEBUG verify_password plain_password:", repr(plain_password), "Length:", len(plain_password))
+    print("DEBUG verify_password hashed_password:", repr(hashed_password))
+
+    # bcrypt absolutely does not support > 72 bytes.
+    # If the string is longer, it MUST be truncated or pre-hashed.
+    plain_password_bytes = plain_password[:72].encode('utf-8')
+    hashed_password_bytes = hashed_password.encode('utf-8')
+    return bcrypt.checkpw(plain_password_bytes, hashed_password_bytes)
+ 
+def get_password_hash(password: str) -> str:
+    if not bcrypt:
+        raise AuthError("Password hashing library not installed")
+    
+    password_bytes = password[:72].encode('utf-8')
+    salt = bcrypt.gensalt()
+    return bcrypt.hashpw(password_bytes, salt).decode('utf-8')
 
 
-def verify_google_id_token(id_token: str) -> dict[str, Any]:
-    """Validate a Google ID token and return its claims."""
 
-    audiences = _audiences()
-    if not audiences:
-        raise AuthError("GOOGLE_CLIENT_ID is not configured")
-
-    request = google_requests.Request()
-    payload = google_id_token.verify_oauth2_token(
-        id_token,
-        request,
-        audiences[0] if len(audiences) == 1 else audiences,
-    )
-
-    issuer = payload.get("iss")
-    if issuer not in ("accounts.google.com", "https://accounts.google.com"):
-        raise AuthError("Invalid token issuer")
-
-    if not payload.get("email"):
-        raise AuthError("Token is missing email")
-
-    if not payload.get("sub"):
-        raise AuthError("Token is missing subject")
-
-    if payload.get("email_verified") is False:
-        raise AuthError("Email is not verified")
-
-    return payload
 
 
 def create_access_token(*, user_id: int, email: str, name: str, picture_url: str) -> str:

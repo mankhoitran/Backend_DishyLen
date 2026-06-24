@@ -52,6 +52,15 @@ class OcrResult:
     image_path: str
 
 
+def _flatten_text(value) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        return " ".join(_flatten_text(v) for v in value.values())
+    if isinstance(value, list):
+        return " ".join(_flatten_text(v) for v in value)
+    return ""
+
 def ocr_menu_image(image_path: str | Path) -> OcrResult:
     """Run OCR on a menu image and return extracted text."""
 
@@ -60,14 +69,31 @@ def ocr_menu_image(image_path: str | Path) -> OcrResult:
         raise FileNotFoundError(f"Image not found: {path}")
 
     try:
-        from PIL import Image
-        import pytesseract
-    except Exception as exc:  # pragma: no cover - optional deps
-        logger.warning("OCR dependencies missing: %s", exc)
-        return OcrResult(text="", status="missing_deps", image_path=str(path))
+        import os
+        import requests
+        ocr_base_url = os.getenv("OCR_URL", "https://lechatonfat.24102006.xyz/v1")
+        # Ensure url is correct
+        if ocr_base_url.endswith("/v1"):
+            ocr_url = ocr_base_url + "/ocr"
+        elif ocr_base_url.endswith("/v1/"):
+            ocr_url = ocr_base_url + "ocr"
+        elif ocr_base_url.endswith("/ocr"):
+            ocr_url = ocr_base_url
+        else:
+            ocr_url = ocr_base_url.rstrip("/") + "/v1/ocr"
 
-    try:
-        text = pytesseract.image_to_string(Image.open(path))
+        with open(path, "rb") as f:
+            response = requests.post(
+                ocr_url,
+                files={"file": (path.name, f, "image/jpeg")},
+                data={
+                    "model": "mistral-ocr-latest",
+                    "include_image_base64": "false",
+                },
+                timeout=120,
+            )
+        response.raise_for_status()
+        text = _flatten_text(response.json())
         cleaned = (text or "").strip()
         return OcrResult(text=cleaned, status="ocr", image_path=str(path))
     except Exception as exc:  # pragma: no cover - optional deps

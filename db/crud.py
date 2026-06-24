@@ -76,46 +76,53 @@ def get_user_by_id(db: Session, user_id: int) -> User | None:
     return db.query(User).filter(User.id == user_id).first()
 
 
-def get_user_by_google_sub(db: Session, google_sub: str) -> User | None:
-    """Fetch a user by Google subject."""
-
-    return db.query(User).filter(User.google_sub == google_sub.strip()).first()
-
-
 def get_user_by_email(db: Session, email: str) -> User | None:
     """Fetch a user by email."""
-
     return db.query(User).filter(User.email.ilike(email.strip())).first()
 
+import uuid
+from db.models import HistoryEntry
 
-def upsert_user(
+def create_guest_user(db: Session) -> User:
+    """Create a new guest user with a unique dummy email."""
+    guest_id = str(uuid.uuid4())
+    user = User(
+        email=f"guest_{guest_id}@dishylen.local",
+        name="Guest User",
+        picture_url="",
+        is_guest=True,
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return user
+
+def delete_guest_user(db: Session, user_id: int) -> bool:
+    """Delete a guest user and their associated history entries. Returns True if deleted."""
+    user = db.query(User).filter(User.id == user_id, User.is_guest == True).first()
+    if user:
+        # Delete history entries first to avoid foreign key constraints
+        db.query(HistoryEntry).filter(HistoryEntry.user_id == user_id).delete()
+        # Delete the user
+        db.delete(user)
+        db.commit()
+        return True
+    return False
+
+
+def create_user_with_password(
     db: Session,
     *,
-    google_sub: str,
     email: str,
+    hashed_password: str,
     name: str | None,
-    picture_url: str | None,
 ) -> User:
-    """Insert or update a user by Google subject or email."""
-
-    existing = get_user_by_google_sub(db, google_sub) or get_user_by_email(db, email)
-    if existing:
-        existing.google_sub = google_sub or existing.google_sub
-        existing.email = email or existing.email
-        if name:
-            existing.name = name
-        if picture_url:
-            existing.picture_url = picture_url
-        db.add(existing)
-        db.commit()
-        db.refresh(existing)
-        return existing
-
+    """Create a new user with email and hashed password."""
     user = User(
-        google_sub=google_sub.strip(),
         email=email.strip(),
+        hashed_password=hashed_password,
         name=name or "",
-        picture_url=picture_url or "",
+        picture_url="",
     )
     db.add(user)
     db.commit()

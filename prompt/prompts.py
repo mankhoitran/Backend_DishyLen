@@ -35,8 +35,9 @@ class OCR:
         "obvious OCR errors (e.g., 'Bow!' -> 'Bowl', 'eed Tea' -> 'Iced Tea'). Do NOT add or remove items.\n"
         "Each item must be a separate array element. Never combine multiple items into one string.\n"
         "Step 3: If User allergies are provided, infer if any item likely contains them. If there is a high likelihood of a conflict, append an allergy warning directly to the item name string (e.g., 'Pad Thai [Allergy Warning: Peanuts]').\n"
+        "Step 4: If no valid food or drink items can be found in the OCR text, return an empty array for items.\n"
         "User allergies: {user_allergies}\n"
-        'Output schema example: {{"items": ["Dish A", "Dish B [Allergy Warning: Peanuts]"]}}\n'
+        'Output schema example: {{"items": ["Dish A", "Dish B [Allergy Warning: Peanuts]"]}} or {{"items": []}}\n'
         "OCR text:\n{ocr_text}"
     )
 

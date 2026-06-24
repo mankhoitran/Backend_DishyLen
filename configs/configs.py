@@ -14,7 +14,6 @@ class Settings(BaseSettings):
     app_name: str = "Food Agent API"
     app_version: str = "1.0.0"
 
-    google_client_id: str = Field(default="", alias="GOOGLE_CLIENT_ID")
     jwt_secret: str = Field(default="change-me", alias="JWT_SECRET")
     jwt_algorithm: str = Field(default="HS256", alias="JWT_ALGORITHM")
     jwt_exp_minutes: int = Field(default=1440, alias="JWT_EXP_MINUTES")

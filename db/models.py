@@ -24,13 +24,14 @@ class Dish(Base):
 
 
 class User(Base):
-    """Application user linked to Google login."""
+    """Application user for authentication."""
 
     __tablename__ = "users"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    google_sub: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
+    hashed_password: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    is_guest: Mapped[bool] = mapped_column(default=False, nullable=False)
     name: Mapped[str] = mapped_column(String(255), default="", nullable=False)
     picture_url: Mapped[str] = mapped_column(Text, default="", nullable=False)
     allergies: Mapped[str] = mapped_column(Text, default="", nullable=False)

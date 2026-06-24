@@ -29,7 +29,7 @@ def test_add_allergy(auth_client):
     assert response.status_code == 200
     assert response.json()["user"]["allergies"] == "peanuts, shellfish"
 
-@patch("app.TranslationService")
+@patch("routers.vllm.TranslationService")
 def test_translate_text(mock_translation_service_cls, auth_client):
     mock_instance = mock_translation_service_cls.return_value
     mock_instance.translate_text.return_value = {"translated_text": "Xin chao"}
